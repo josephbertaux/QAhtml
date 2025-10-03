@@ -6,6 +6,7 @@
 #include <TCanvas.h>
 #include <TDatime.h>
 #include <TGraphErrors.h>
+#include <TFitResult.h>
 #include <TH1.h>
 #include <TH2.h>
 #include <TProfile.h>
@@ -13,7 +14,7 @@
 #include <TROOT.h>
 #include <TStyle.h>
 #include <TSystem.h>
-#include <TText.h>
+#include <TLatex.h>
 #include <TLatex.h>
 #include <TColor.h>
 #include <TLegend.h>
@@ -24,6 +25,7 @@
 #include <ctime>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <sstream>
 
 #define WHERE __FILE__ << ":" << __LINE__
@@ -55,6 +57,7 @@ Tracking2dPmDrawer::MakeCanvas (
 
 	m_canvas->cd();	
 	m_pos_pad = new TPad("pad", "pad", 0.0, 0.0, 0.5, 1.0);
+	m_pos_pad->SetRightMargin(0.2);
 	m_pos_pad->Draw();
 	m_pos_overlay_pad = new TPad("pad", "pad", 0.0, 0.0, 0.5, 1.0);
 	m_pos_overlay_pad->SetFillStyle(4000);
@@ -62,6 +65,7 @@ Tracking2dPmDrawer::MakeCanvas (
 
 	m_canvas->cd();	
 	m_neg_pad = new TPad("pad", "pad", 0.5, 0.0, 1.0, 1.0);
+	m_neg_pad->SetRightMargin(0.2);
 	m_neg_pad->Draw();
 	m_neg_overlay_pad = new TPad("pad", "pad", 0.5, 0.0, 1.0, 1.0);
 	m_neg_overlay_pad->SetFillStyle(4000);
@@ -83,8 +87,8 @@ Tracking2dPmDrawer::DrawCanvas (
 
 	QADrawClient *cl = QADrawClient::instance();
 
-	TH1* h_pos = dynamic_cast<TH1*>(cl->getHisto((boost::format(m_pattern) % m_name % "positively").str()));
-	TH1* h_neg = dynamic_cast<TH1*>(cl->getHisto((boost::format(m_pattern) % m_name % "negatively").str()));
+	auto h_pos = dynamic_cast<TH2*>(cl->getHisto((boost::format(m_pattern) % m_name % "positively").str()));
+	auto h_neg = dynamic_cast<TH2*>(cl->getHisto((boost::format(m_pattern) % m_name % "negatively").str()));
 
 	if (!h_pos || !h_neg) {
 		std::cout
@@ -97,29 +101,59 @@ Tracking2dPmDrawer::DrawCanvas (
 
 	m_canvas->Clear("D");
 
+	// Used with fits later
+	float slope = std::numeric_limits<float>::max();
+	float error = std::numeric_limits<float>::max();
 
 	m_pos_pad->cd();
 	h_pos->SetLineColor(kRed);
 	h_pos->SetMarkerColor(kRed);
 	//...
 	h_pos->Draw("COLZ");
+	if (auto h_pos_profile = dynamic_cast<TProfile*>(cl->getHisto((boost::format(m_pattern) % m_name % "positively").str() + "_profile"))) {
+		// Some 2D quantities include a profile (pt_err), which has the same name with "_profile" appended
+		// See if that exists and if so, draw it and fit it
+		h_pos_profile->Draw("same");
+		auto fit_result_ptr = h_pos_profile->Fit("expo", "WSQ");
+		if (fit_result_ptr->Status() == 0 || fit_result_ptr->Status() == 1) {
+			slope = fit_result_ptr->GetParams()[1];
+			error = fit_result_ptr->GetErrors()[1];
+		}
+	}
 	m_pos_overlay_pad->cd();
-	TText pos_text;
+	TLatex pos_text;
 	pos_text.SetTextSize(0.04);
-	pos_text.DrawText(0.1, 0.05, "Positive tracks");
-
+	pos_text.DrawLatex(0.1, 0.05, (boost::format("Positive tracks (%d)") % h_pos->GetEntries()).str().c_str());
+	if (slope != std::numeric_limits<float>::max()) {
+		pos_text.DrawLatex(0.2, 0.85, (boost::format("LogSlope = %.3f#pm%.3f") % slope % error).str().c_str());
+	}
 
 	m_neg_pad->cd();
 	h_neg->SetLineColor(kBlue);
 	h_neg->SetMarkerColor(kBlue);
 	//...
 	h_neg->Draw("COLZ");
+	slope = std::numeric_limits<float>::max();
+	error = std::numeric_limits<float>::max();
+	if (auto h_neg_profile = dynamic_cast<TProfile*>(cl->getHisto((boost::format(m_pattern) % m_name % "negatively").str() + "_profile"))) {
+		// Some 2D quantities include a profile (pt_err), which has the same name with "_profile" appended
+		// See if that exists and if so, draw it and fit it
+		h_neg_profile->Draw("same");
+		auto fit_result_ptr = h_neg_profile->Fit("expo", "WSQ");
+		if (fit_result_ptr->Status() == 0 || fit_result_ptr->Status() == 1) {
+			slope = fit_result_ptr->GetParams()[1];
+			error = fit_result_ptr->GetErrors()[1];
+		}
+	}
 	m_neg_overlay_pad->cd();
-	TText neg_text;
+	TLatex neg_text;
 	neg_text.SetTextSize(0.04);
-	neg_text.DrawText(0.1, 0.05, "Negative tracks");
+	neg_text.DrawLatex(0.1, 0.05, (boost::format("Negative tracks (%d)") % h_neg->GetEntries()).str().c_str());
+	if (slope != std::numeric_limits<float>::max()) {
+		neg_text.DrawLatex(0.2, 0.85, (boost::format("LogSlope = %.3f#pm%.3f") % slope % error).str().c_str());
+	}
 
-	TText print_run;
+	TLatex print_run;
 	print_run.SetTextFont(62);
 	print_run.SetTextSize(0.04);
 	print_run.SetNDC();	// set to normalized coordinates
@@ -130,7 +164,7 @@ Tracking2dPmDrawer::DrawCanvas (
 	run_num_stream << "TrackFittingQA Info Run " << cl->RunNumber() << ", build " << cl->build();
 	std::string run_num_string = run_num_stream.str();
 
-	print_run.DrawText(0.5, 1., run_num_string.c_str());
+	print_run.DrawLatex(0.5, 1., run_num_string.c_str());
 
 	m_canvas->Update();
 
